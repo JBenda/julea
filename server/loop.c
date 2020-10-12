@@ -340,7 +340,7 @@ jd_handle_message(JMessage* message, JEndpoint* jendpoint, JMemoryChunk* memory_
 			j_message_add_operation(reply, 1);
 			j_message_append_string(reply, empty);
 
-			j_message_send(reply, connection);
+			j_message_send(reply, jendpoint);
 		}
 		break;
 		case J_MESSAGE_OBJECT_GET_BY_PREFIX:
@@ -370,7 +370,7 @@ jd_handle_message(JMessage* message, JEndpoint* jendpoint, JMemoryChunk* memory_
 			j_message_add_operation(reply, 1);
 			j_message_append_string(reply, empty);
 
-			j_message_send(reply, connection);
+			j_message_send(reply, jendpoint);
 		}
 		break;
 		case J_MESSAGE_OBJECT_READ:
@@ -564,7 +564,7 @@ jd_handle_message(JMessage* message, JEndpoint* jendpoint, JMemoryChunk* memory_
 
 			if (safety == J_SEMANTICS_SAFETY_NETWORK || safety == J_SEMANTICS_SAFETY_STORAGE)
 			{
-				j_message_send(reply, connection);
+				j_message_send(reply, jendpoint);
 			}
 		}
 		break;
