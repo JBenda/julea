@@ -1,6 +1,6 @@
 /*
  * JULEA - Flexible storage framework
- * Copyright (C) 2010-2020 Michael Kuhn
+ * Copyright (C) 2010-2021 Michael Kuhn
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -36,6 +36,14 @@ struct JBackendData
 };
 
 typedef struct JBackendData JBackendData;
+
+struct JBackendIterator
+{
+	JDirIterator* iterator;
+	gchar* prefix;
+};
+
+typedef struct JBackendIterator JBackendIterator;
 
 struct JBackendObject
 {
@@ -131,8 +139,11 @@ end:
 static void
 backend_file_add(GHashTable* files, JBackendObject* object)
 {
-	g_hash_table_insert(jd_backend_file_cache, object->path, object);
-	g_hash_table_insert(files, object->path, object);
+	if (object != NULL)
+	{
+		g_hash_table_insert(jd_backend_file_cache, object->path, object);
+		g_hash_table_insert(files, object->path, object);
+	}
 
 	G_UNLOCK(jd_backend_file_cache);
 }
@@ -168,6 +179,12 @@ backend_create(gpointer backend_data, gchar const* namespace, gchar const* path,
 	fd = open(full_path, O_RDWR | O_CREAT, 0600);
 
 	j_trace_file_end(full_path, J_TRACE_FILE_CREATE, 0, 0);
+
+	if (fd == -1)
+	{
+		backend_file_add(files, NULL);
+		goto end;
+	}
 
 	bo = g_slice_new(JBackendObject);
 	bo->path = full_path;
@@ -207,6 +224,12 @@ backend_open(gpointer backend_data, gchar const* namespace, gchar const* path, g
 	j_trace_file_begin(full_path, J_TRACE_FILE_OPEN);
 	fd = open(full_path, O_RDWR);
 	j_trace_file_end(full_path, J_TRACE_FILE_OPEN, 0, 0);
+
+	if (fd == -1)
+	{
+		backend_file_add(files, NULL);
+		goto end;
+	}
 
 	bo = g_slice_new(JBackendObject);
 	bo->path = full_path;
@@ -382,6 +405,92 @@ backend_write(gpointer backend_data, gpointer backend_object, gconstpointer buff
 }
 
 static gboolean
+backend_get_all(gpointer backend_data, gchar const* namespace, gpointer* backend_iterator)
+{
+	JBackendData* bd = backend_data;
+	JBackendIterator* iterator = NULL;
+	JDirIterator* it;
+	g_autofree gchar* full_path = NULL;
+
+	g_return_val_if_fail(namespace != NULL, FALSE);
+	g_return_val_if_fail(backend_iterator != NULL, FALSE);
+
+	full_path = g_build_filename(bd->path, namespace, NULL);
+	it = j_dir_iterator_new(full_path);
+
+	if (it != NULL)
+	{
+		iterator = g_slice_new(JBackendIterator);
+		iterator->iterator = it;
+		iterator->prefix = NULL;
+
+		*backend_iterator = iterator;
+	}
+
+	return (iterator != NULL);
+}
+
+static gboolean
+backend_get_by_prefix(gpointer backend_data, gchar const* namespace, gchar const* prefix, gpointer* backend_iterator)
+{
+	JBackendData* bd = backend_data;
+	JBackendIterator* iterator = NULL;
+	JDirIterator* it;
+	g_autofree gchar* full_path = NULL;
+
+	g_return_val_if_fail(namespace != NULL, FALSE);
+	g_return_val_if_fail(prefix != NULL, FALSE);
+	g_return_val_if_fail(backend_iterator != NULL, FALSE);
+
+	full_path = g_build_filename(bd->path, namespace, NULL);
+	it = j_dir_iterator_new(full_path);
+
+	if (it != NULL)
+	{
+		iterator = g_slice_new(JBackendIterator);
+		iterator->iterator = it;
+		iterator->prefix = g_strdup(prefix);
+
+		*backend_iterator = iterator;
+	}
+
+	return (iterator != NULL);
+}
+
+static gboolean
+backend_iterate(gpointer backend_data, gpointer backend_iterator, gchar const** name)
+{
+	JBackendIterator* iterator = backend_iterator;
+
+	(void)backend_data;
+
+	g_return_val_if_fail(backend_iterator != NULL, FALSE);
+	g_return_val_if_fail(name != NULL, FALSE);
+
+	while (j_dir_iterator_next(iterator->iterator))
+	{
+		gchar const* name_;
+
+		name_ = j_dir_iterator_get(iterator->iterator);
+
+		if (iterator->prefix != NULL && !g_str_has_prefix(name_, iterator->prefix))
+		{
+			continue;
+		}
+
+		*name = name_;
+
+		return TRUE;
+	}
+
+	g_free(iterator->prefix);
+	j_dir_iterator_free(iterator->iterator);
+	g_slice_free(JBackendIterator, iterator);
+
+	return FALSE;
+}
+
+static gboolean
 backend_init(gchar const* path, gpointer* backend_data)
 {
 	JBackendData* bd;
@@ -428,7 +537,10 @@ static JBackend posix_backend = {
 		.backend_status = backend_status,
 		.backend_sync = backend_sync,
 		.backend_read = backend_read,
-		.backend_write = backend_write }
+		.backend_write = backend_write,
+		.backend_get_all = backend_get_all,
+		.backend_get_by_prefix = backend_get_by_prefix,
+		.backend_iterate = backend_iterate }
 };
 
 G_MODULE_EXPORT

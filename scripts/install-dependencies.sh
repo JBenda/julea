@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # JULEA - Flexible storage framework
-# Copyright (C) 2017-2020 Michael Kuhn
+# Copyright (C) 2017-2021 Michael Kuhn
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -22,7 +22,9 @@ SELF_PATH="$(readlink --canonicalize-existing -- "$0")"
 SELF_DIR="${SELF_PATH%/*}"
 SELF_BASE="${SELF_PATH##*/}"
 
+# shellcheck source=scripts/common
 . "${SELF_DIR}/common"
+# shellcheck source=scripts/spack
 . "${SELF_DIR}/spack"
 
 usage ()

@@ -1,5 +1,5 @@
 # JULEA - Flexible storage framework
-# Copyright (C) 2017-2020 Michael Kuhn
+# Copyright (C) 2017-2021 Michael Kuhn
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -19,7 +19,7 @@ spack_clone ()
 	local spack_commit
 
 	# FIXME maybe use release branch instead
-	spack_commit='84381fbc80203aff14ee771cda77255721dd1859'
+	spack_commit='459171b97361807e4736f8b2986eef365034e3de'
 
 	test -n "${SPACK_DIR}" || return 1
 
@@ -31,7 +31,7 @@ spack_clone ()
 	test -d "${SPACK_DIR}" || return 1
 
 	(
-		cd "${SPACK_DIR}"
+		cd "${SPACK_DIR}" || return 1
 
 		git fetch
 		git reset --hard "${spack_commit}"
@@ -42,7 +42,6 @@ spack_clone ()
 
 spack_init ()
 {
-	local modules_dir
 	local spack_env
 
 	test -n "${SPACK_DIR}" || return 1
@@ -52,25 +51,21 @@ spack_init ()
 
 	test -f "${spack_env}" || return 1
 
+	# shellcheck source=/dev/null
 	. "${spack_env}"
 
 	return 0
 }
 
-spack_install ()
+spack_cmd ()
 {
-	local spack_pkg
-
-	spack_pkg="$1"
-
 	test -n "${SPACK_DIR}" || return 1
 	test -d "${SPACK_DIR}" || return 1
-	test -n "${spack_pkg}" || return 1
 
 	(
-		cd "${SPACK_DIR}"
+		cd "${SPACK_DIR}" || return 1
 
-		./bin/spack install "${spack_pkg}"
+		./bin/spack "$@"
 	)
 }
 
@@ -120,13 +115,12 @@ spack_get_dependencies ()
 		# Optional dependencies
 		dependencies="${dependencies} leveldb"
 		dependencies="${dependencies} mongo-c-driver"
-		dependencies="${dependencies} hdf5~mpi@1.12:"
+		dependencies="${dependencies} hdf5#@1.12:#~mpi"
 		dependencies="${dependencies} mariadb-c-client"
 		dependencies="${dependencies} rocksdb"
 
 		# FIXME move to minimal
-		# FIXME set fabrics
-		dependencies="${dependencies} libfabric"
+		dependencies="${dependencies} libfabric#fabrics=sockets,tcp,udp,verbs,rxd,rxm"
 
 		#dependencies="${dependencies} mpi"
 		#dependencies="${dependencies} otf"
@@ -143,6 +137,7 @@ spack_load_dependencies ()
 		then
 			for dependency in $(spack_get_dependencies full)
 			do
+				dependency="$(printf '%s' "${dependency}" | sed 's/#/ /g')"
 				spack_load "${dependency}"
 			done
 
@@ -166,10 +161,20 @@ spack_install_dependencies ()
 
 	if spack_clone
 	then
+		if test -n "${CI}"
+		then
+			spack_cmd config --scope site add 'packages:all:target:[x86_64]'
+		fi
+
+		spack_cmd mark --implicit --all
+
 		for dependency in $(spack_get_dependencies "${mode}")
 		do
+			dependency="$(printf '%s' "${dependency}" | sed 's/#/ /g')"
 			# FIXME ignore errors?
-			spack_install "${dependency}"
+			spack_cmd install "${dependency}"
 		done
+
+		spack_cmd gc --yes-to-all
 	fi
 }

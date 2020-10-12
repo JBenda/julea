@@ -1,6 +1,6 @@
 /*
  * JULEA - Flexible storage framework
- * Copyright (C) 2010-2020 Michael Kuhn
+ * Copyright (C) 2010-2021 Michael Kuhn
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -24,6 +24,7 @@ void test_core_batch(void);
 void test_core_cache(void);
 void test_core_configuration(void);
 void test_core_credentials(void);
+void test_core_dir_iterator(void);
 void test_core_distribution(void);
 void test_core_list(void);
 void test_core_list_iterator(void);
@@ -33,6 +34,7 @@ void test_core_semantics(void);
 
 void test_object_distributed_object(void);
 void test_object_object(void);
+void test_object_object_iterator(void);
 
 void test_kv_kv(void);
 void test_kv_kv_iterator(void);

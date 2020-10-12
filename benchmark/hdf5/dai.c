@@ -1,6 +1,6 @@
 /*
  * JULEA - Flexible storage framework
- * Copyright (C) 2020 Michael Kuhn
+ * Copyright (C) 2020-2021 Michael Kuhn
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -30,6 +30,7 @@
 
 #ifdef HAVE_HDF5
 
+#include <julea-db.h>
 #include <julea-hdf5.h>
 #include <julea-kv.h>
 
@@ -45,7 +46,7 @@ set_semantics(void)
 }
 
 static gboolean
-deserialize_attribute_data(gconstpointer value, guint32 len, gpointer* data, gsize* data_size)
+deserialize_attribute_data(gconstpointer value, guint32 len, gconstpointer* data, gsize* data_size)
 {
 	bson_t bson[1];
 	bson_iter_t iterator;
@@ -151,7 +152,7 @@ benchmark_hdf_dai_native(BenchmarkRun* run)
 			g_autofree gchar* name = NULL;
 
 			name = g_strdup_printf("benchmark-dai-native-%u.h5", i + (iter * n));
-			file = H5Fcreate(name, H5F_ACC_EXCL, H5P_DEFAULT, j_hdf5_get_fapl());
+			file = H5Fcreate(name, H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT);
 			group = H5Gcreate2(file, "benchmark-dai-native", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
 			for (guint j = 0; j < n * 10; j++)
@@ -175,7 +176,7 @@ benchmark_hdf_dai_native(BenchmarkRun* run)
 			g_autofree gchar* name = NULL;
 
 			name = g_strdup_printf("benchmark-dai-native-%u.h5", i + (iter * n));
-			file = H5Fopen(name, H5F_ACC_RDWR, j_hdf5_get_fapl());
+			file = H5Fopen(name, H5F_ACC_RDWR, H5P_DEFAULT);
 			group = H5Gopen2(file, "benchmark-dai-native", H5P_DEFAULT);
 
 			for (guint j = 0; j < n * 10; j++)
@@ -199,7 +200,7 @@ benchmark_hdf_dai_native(BenchmarkRun* run)
 }
 
 static void
-benchmark_hdf_dai_get(BenchmarkRun* run)
+benchmark_hdf_dai_kv_get(BenchmarkRun* run)
 {
 	guint const n = 25;
 
@@ -221,7 +222,7 @@ benchmark_hdf_dai_get(BenchmarkRun* run)
 			g_autofree gchar* name = NULL;
 
 			name = g_strdup_printf("benchmark-dai-get-%u.h5", i + (iter * n));
-			file = H5Fcreate(name, H5F_ACC_EXCL, H5P_DEFAULT, j_hdf5_get_fapl());
+			file = H5Fcreate(name, H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT);
 			group = H5Gcreate2(file, "benchmark-dai-get", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
 			for (guint j = 0; j < n * 10; j++)
@@ -250,7 +251,7 @@ benchmark_hdf_dai_get(BenchmarkRun* run)
 				g_autofree gchar* aname = NULL;
 				g_autofree gchar* value = NULL;
 				guint32 len = 0;
-				gpointer adata = NULL;
+				gconstpointer adata = NULL;
 				gsize alen = 0;
 
 				aname = g_strdup_printf("%s/benchmark-dai-get-%u", name, j);
@@ -275,7 +276,7 @@ benchmark_hdf_dai_get(BenchmarkRun* run)
 }
 
 static void
-benchmark_hdf_dai_iterator(BenchmarkRun* run)
+benchmark_hdf_dai_kv_iterator(BenchmarkRun* run)
 {
 	guint const n = 25;
 
@@ -295,7 +296,7 @@ benchmark_hdf_dai_iterator(BenchmarkRun* run)
 			g_autofree gchar* name = NULL;
 
 			name = g_strdup_printf("benchmark-dai-iterator-%u.h5", i + (iter * n));
-			file = H5Fcreate(name, H5F_ACC_EXCL, H5P_DEFAULT, j_hdf5_get_fapl());
+			file = H5Fcreate(name, H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT);
 			group = H5Gcreate2(file, "benchmark-dai-iterator", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
 			for (guint j = 0; j < n * 10; j++)
@@ -319,7 +320,7 @@ benchmark_hdf_dai_iterator(BenchmarkRun* run)
 			gchar const* key;
 			gconstpointer value;
 			guint32 len;
-			gpointer adata = NULL;
+			gconstpointer adata = NULL;
 			gsize alen = 0;
 
 			key = j_kv_iterator_get(kv_iterator, &value, &len);
@@ -341,14 +342,105 @@ benchmark_hdf_dai_iterator(BenchmarkRun* run)
 	run->operations = attrs / iter;
 }
 
+static void
+benchmark_hdf_dai_db_iterator(BenchmarkRun* run)
+{
+	guint const n = 25;
+
+	guint iter = 0;
+	guint attrs = 0;
+
+	set_semantics();
+
+	while (j_benchmark_iterate(run))
+	{
+		g_autoptr(GError) error = NULL;
+		g_autoptr(JBatch) batch = NULL;
+		g_autoptr(JDBIterator) iterator = NULL;
+		g_autoptr(JDBSchema) schema = NULL;
+		g_autoptr(JDBSelector) selector = NULL;
+
+		gboolean ret;
+
+		for (guint i = 0; i < n; i++)
+		{
+			hid_t file;
+			hid_t group;
+			g_autofree gchar* name = NULL;
+
+			name = g_strdup_printf("benchmark-dai-db-iterator-%u.h5", i + (iter * n));
+			file = H5Fcreate(name, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+			group = H5Gcreate2(file, "benchmark-dai-db-iterator", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+
+			for (guint j = 0; j < n * 10; j++)
+			{
+				g_autofree gchar* aname = NULL;
+
+				aname = g_strdup_printf("benchmark-dai-db-iterator-%u", j);
+				write_attribute(group, aname);
+			}
+
+			H5Gclose(group);
+			H5Fclose(file);
+		}
+
+		j_benchmark_timer_start(run);
+
+		batch = j_batch_new_for_template(J_SEMANTICS_TEMPLATE_DEFAULT);
+
+		schema = j_db_schema_new("HDF5_DB", "attr", NULL);
+		j_db_schema_get(schema, batch, &error);
+		ret = j_batch_execute(batch);
+		g_assert_true(ret);
+
+		selector = j_db_selector_new(schema, J_DB_SELECTOR_MODE_AND, &error);
+		iterator = j_db_iterator_new(schema, selector, &error);
+
+		while (j_db_iterator_next(iterator, &error))
+		{
+			JDBType type;
+			g_autofree gpointer data = NULL;
+			guint64 data_len;
+
+			if (j_db_iterator_get_field(iterator, "data", &type, &data, &data_len, &error))
+			{
+				attrs++;
+			}
+		}
+
+		j_benchmark_timer_stop(run);
+
+		iter++;
+	}
+
+	run->operations = attrs / iter;
+}
+
 #endif
 
 void
 benchmark_hdf_dai(void)
 {
 #ifdef HAVE_HDF5
+	gchar const* vol_connector;
+
+	if ((vol_connector = g_getenv("HDF5_VOL_CONNECTOR")) == NULL)
+	{
+		// Make sure we do not accidentally run benchmarks for native HDF5
+		// If comparisons with native HDF5 are necessary, set HDF5_VOL_CONNECTOR to "native"
+		return;
+	}
+
 	j_benchmark_add("/hdf5/dai/native", benchmark_hdf_dai_native);
-	j_benchmark_add("/hdf5/dai/get", benchmark_hdf_dai_get);
-	j_benchmark_add("/hdf5/dai/iterator", benchmark_hdf_dai_iterator);
+
+	if (g_strcmp0(vol_connector, "julea") == 0)
+	{
+		j_benchmark_add("/hdf5/dai/kv-get", benchmark_hdf_dai_kv_get);
+		j_benchmark_add("/hdf5/dai/kv-iterator", benchmark_hdf_dai_kv_iterator);
+	}
+	else if (g_strcmp0(vol_connector, "julea-db") == 0)
+	{
+		j_benchmark_add("/hdf5/dai/db-iterator", benchmark_hdf_dai_db_iterator);
+	}
 #endif
 }

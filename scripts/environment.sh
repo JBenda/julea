@@ -1,5 +1,5 @@
 # JULEA - Flexible storage framework
-# Copyright (C) 2017-2020 Michael Kuhn
+# Copyright (C) 2017-2021 Michael Kuhn
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -15,14 +15,40 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 SELF_ZERO="$0"
+# shellcheck disable=SC2169
 test -n "${BASH_VERSION}" && SELF_ZERO="${BASH_SOURCE[0]}"
 
 SELF_PATH="$(readlink --canonicalize-existing -- "${SELF_ZERO}")"
 SELF_DIR="${SELF_PATH%/*}"
+# shellcheck disable=SC2034
 SELF_BASE="${SELF_PATH##*/}"
 
+# shellcheck source=scripts/common
 . "${SELF_DIR}/common"
+# shellcheck source=scripts/spack
 . "${SELF_DIR}/spack"
+
+JULEA_ENVIRONMENT_SOURCED=1
+
+# See https://stackoverflow.com/a/28776166
+if test -n "${BASH_VERSION}"
+then
+	(return 0 2>/dev/null) || JULEA_ENVIRONMENT_SOURCED=0
+elif test -n "${ZSH_EVAL_CONTEXT}"
+then
+	case "${ZSH_EVAL_CONTEXT}" in
+		*:file)
+			;;
+		*)
+			JULEA_ENVIRONMENT_SOURCED=0
+			;;
+	esac
+fi
+
+if test "${JULEA_ENVIRONMENT_SOURCED}" -eq 0
+then
+	printf 'Warning: This script should be sourced using ". %s", otherwise changes to the environment will not persist.\n' "${SELF_PATH}" >&2
+fi
 
 JULEA_ENVIRONMENT=1
 
@@ -30,6 +56,7 @@ set_path
 set_library_path
 set_pkg_config_path
 set_backend_path
+set_hdf_path
 
 SPACK_DIR="$(get_directory "${SELF_DIR}/..")/dependencies"
 

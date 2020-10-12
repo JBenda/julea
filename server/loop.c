@@ -1,6 +1,6 @@
 /*
  * JULEA - Flexible storage framework
- * Copyright (C) 2010-2020 Michael Kuhn
+ * Copyright (C) 2010-2021 Michael Kuhn
  * Copyright (C) 2019 Benjamin Warnke
  *
  * This program is free software: you can redistribute it and/or modify
@@ -291,17 +291,21 @@ jd_handle_message(JMessage* message, JEndpoint* jendpoint, JMemoryChunk* memory_
 
 			for (i = 0; i < operation_count; i++)
 			{
+				guint32 status = 0;
+
 				path = j_message_get_string(message);
 
 				if (j_backend_object_open(jd_object_backend, namespace, path, &object)
 				    && j_backend_object_delete(jd_object_backend, object))
 				{
+					status = 1;
 					j_statistics_add(statistics, J_STATISTICS_FILES_DELETED, 1);
 				}
 
 				if (reply != NULL)
 				{
-					j_message_add_operation(reply, 0);
+					j_message_add_operation(reply, sizeof(status));
+					j_message_append_4(reply, &status);
 				}
 			}
 
@@ -309,6 +313,64 @@ jd_handle_message(JMessage* message, JEndpoint* jendpoint, JMemoryChunk* memory_
 			{
 				j_message_send(reply, jendpoint);
 			}
+		}
+		break;
+		case J_MESSAGE_OBJECT_GET_ALL:
+		{
+			g_autoptr(JMessage) reply = NULL;
+			gpointer iterator;
+			gchar const* empty = "";
+
+			reply = j_message_new_reply(message);
+			namespace = j_message_get_string(message);
+
+			if (j_backend_object_get_all(jd_object_backend, namespace, &iterator))
+			{
+				while (j_backend_object_iterate(jd_object_backend, iterator, &key))
+				{
+					gsize key_len;
+
+					key_len = strlen(key) + 1;
+
+					j_message_add_operation(reply, key_len);
+					j_message_append_string(reply, key);
+				}
+			}
+
+			j_message_add_operation(reply, 1);
+			j_message_append_string(reply, empty);
+
+			j_message_send(reply, connection);
+		}
+		break;
+		case J_MESSAGE_OBJECT_GET_BY_PREFIX:
+		{
+			g_autoptr(JMessage) reply = NULL;
+			gchar const* prefix;
+			gpointer iterator;
+			gchar const* empty = "";
+
+			reply = j_message_new_reply(message);
+			namespace = j_message_get_string(message);
+			prefix = j_message_get_string(message);
+
+			if (j_backend_object_get_by_prefix(jd_object_backend, namespace, prefix, &iterator))
+			{
+				while (j_backend_object_iterate(jd_object_backend, iterator, &key))
+				{
+					gsize key_len;
+
+					key_len = strlen(key) + 1;
+
+					j_message_add_operation(reply, key_len);
+					j_message_append_string(reply, key);
+				}
+			}
+
+			j_message_add_operation(reply, 1);
+			j_message_append_string(reply, empty);
+
+			j_message_send(reply, connection);
 		}
 		break;
 		case J_MESSAGE_OBJECT_READ:
@@ -471,6 +533,41 @@ jd_handle_message(JMessage* message, JEndpoint* jendpoint, JMemoryChunk* memory_
 			j_message_send(reply, jendpoint);
 		}
 		break;
+		case J_MESSAGE_OBJECT_SYNC:
+		{
+			g_autoptr(JMessage) reply = NULL;
+			gpointer object;
+
+			if (safety == J_SEMANTICS_SAFETY_NETWORK || safety == J_SEMANTICS_SAFETY_STORAGE)
+			{
+				reply = j_message_new_reply(message);
+			}
+
+			namespace = j_message_get_string(message);
+
+			for (i = 0; i < operation_count; i++)
+			{
+				path = j_message_get_string(message);
+
+				if (j_backend_object_open(jd_object_backend, namespace, path, &object))
+				{
+					j_backend_object_sync(jd_object_backend, object);
+					j_statistics_add(statistics, J_STATISTICS_SYNC, 1);
+					j_backend_object_close(jd_object_backend, object);
+				}
+
+				if (safety == J_SEMANTICS_SAFETY_NETWORK || safety == J_SEMANTICS_SAFETY_STORAGE)
+				{
+					j_message_add_operation(reply, 0);
+				}
+			}
+
+			if (safety == J_SEMANTICS_SAFETY_NETWORK || safety == J_SEMANTICS_SAFETY_STORAGE)
+			{
+				j_message_send(reply, connection);
+			}
+		}
+		break;
 		case J_MESSAGE_STATISTICS:
 		{
 			g_autoptr(JMessage) reply = NULL;
@@ -537,6 +634,12 @@ jd_handle_message(JMessage* message, JEndpoint* jendpoint, JMemoryChunk* memory_
 			{
 				j_message_add_operation(reply, 3);
 				j_message_append_string(reply, "kv");
+			}
+
+			if (jd_db_backend != NULL)
+			{
+				j_message_add_operation(reply, 3);
+				j_message_append_string(reply, "db");
 			}
 
 			j_message_send(reply, jendpoint);

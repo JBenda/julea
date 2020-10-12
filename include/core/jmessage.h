@@ -1,6 +1,6 @@
 /*
  * JULEA - Flexible storage framework
- * Copyright (C) 2010-2020 Michael Kuhn
+ * Copyright (C) 2010-2021 Michael Kuhn
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -44,8 +44,11 @@ enum JMessageType
 	J_MESSAGE_STATISTICS,
 	J_MESSAGE_OBJECT_CREATE,
 	J_MESSAGE_OBJECT_DELETE,
+	J_MESSAGE_OBJECT_GET_ALL,
+	J_MESSAGE_OBJECT_GET_BY_PREFIX,
 	J_MESSAGE_OBJECT_READ,
 	J_MESSAGE_OBJECT_STATUS,
+	J_MESSAGE_OBJECT_SYNC,
 	J_MESSAGE_OBJECT_WRITE,
 	J_MESSAGE_KV_PUT,
 	J_MESSAGE_KV_DELETE,

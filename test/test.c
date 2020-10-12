@@ -1,6 +1,6 @@
 /*
  * JULEA - Flexible storage framework
- * Copyright (C) 2010-2020 Michael Kuhn
+ * Copyright (C) 2010-2021 Michael Kuhn
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -42,6 +42,7 @@ main(int argc, char** argv)
 	test_core_cache();
 	test_core_configuration();
 	test_core_credentials();
+	test_core_dir_iterator();
 	test_core_distribution();
 	test_core_list();
 	test_core_list_iterator();
@@ -52,6 +53,7 @@ main(int argc, char** argv)
 	// Object client
 	test_object_distributed_object();
 	test_object_object();
+	test_object_object_iterator();
 
 	// KV client
 	test_kv_kv();

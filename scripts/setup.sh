@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # JULEA - Flexible storage framework
-# Copyright (C) 2013-2020 Michael Kuhn
+# Copyright (C) 2013-2021 Michael Kuhn
 # Copyright (C) 2013 Anna Fuchs
 #
 # This program is free software: you can redistribute it and/or modify
@@ -23,8 +23,11 @@ SELF_PATH="$(readlink --canonicalize-existing -- "$0")"
 SELF_DIR="${SELF_PATH%/*}"
 SELF_BASE="${SELF_PATH##*/}"
 
+# shellcheck source=scripts/common
 . "${SELF_DIR}/common"
+# shellcheck source=scripts/setup
 . "${SELF_DIR}/setup"
+# shellcheck source=scripts/spack
 . "${SELF_DIR}/spack"
 
 usage ()
@@ -48,6 +51,7 @@ setup_slurm ()
 
 		for node in ${nodes}
 		do
+			# shellcheck disable=SC2029
 			ssh "${node}" "${SELF_PATH}" "${mode}-local"
 		done
 

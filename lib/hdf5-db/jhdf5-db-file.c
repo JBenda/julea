@@ -211,6 +211,8 @@ H5VL_julea_db_file_create(const char* name, unsigned flags, hid_t fcpl_id, hid_t
 	//create new file
 	if (!exist)
 	{
+		H5VL_julea_db_object_unref(object);
+
 		if (!(object = H5VL_julea_db_object_new(J_HDF5_OBJECT_TYPE_FILE)))
 		{
 			j_goto_error();
@@ -299,7 +301,6 @@ H5VL_julea_db_file_open(const char* name, unsigned flags, hid_t fapl_id, hid_t d
 	g_autoptr(JDBSelector) selector = NULL;
 	JHDF5Object_t* object = NULL;
 	JDBType type;
-	g_autofree void* value = NULL;
 
 	(void)flags;
 	(void)fapl_id;

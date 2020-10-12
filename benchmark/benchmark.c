@@ -1,6 +1,6 @@
 /*
  * JULEA - Flexible storage framework
- * Copyright (C) 2010-2020 Michael Kuhn
+ * Copyright (C) 2010-2021 Michael Kuhn
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -140,6 +140,11 @@ j_benchmark_run_one(BenchmarkRun* run)
 
 	g_return_if_fail(run != NULL);
 
+	if (j_benchmark_name_max == 0)
+	{
+		return;
+	}
+
 	if (opt_list)
 	{
 		g_print("%s\n", run->name);
@@ -226,7 +231,7 @@ j_benchmark_run_one(BenchmarkRun* run)
 
 	if (run->iterations > 1000 * (guint)opt_duration)
 	{
-		g_warning("Benchmark %s performed %d iterations, consider adjusting iteration workload.", run->name, run->iterations);
+		g_warning("Benchmark %s performed %d iteration(s) in a duration of %d second(s), consider adjusting iteration workload.", run->name, run->iterations, opt_duration);
 	}
 }
 
@@ -234,6 +239,11 @@ static void
 j_benchmark_run_all(void)
 {
 	GList* benchmark;
+
+	if (j_benchmarks == NULL || j_benchmark_name_max == 0)
+	{
+		return;
+	}
 
 	if (!opt_machine_readable)
 	{
@@ -306,7 +316,7 @@ main(int argc, char** argv)
 
 		if (error != NULL)
 		{
-			g_printerr("%s\n", error->message);
+			g_printerr("Error: %s\n", error->message);
 			g_error_free(error);
 		}
 
@@ -314,6 +324,13 @@ main(int argc, char** argv)
 	}
 
 	g_option_context_free(context);
+
+	if (opt_duration <= 0)
+	{
+		g_printerr("Error: Duration has to be greater than 0\n");
+
+		return 1;
+	}
 
 	if (opt_machine_separator == NULL)
 	{
@@ -336,6 +353,8 @@ main(int argc, char** argv)
 	benchmark_object();
 
 	// DB client
+	benchmark_db_entry();
+	benchmark_db_iterator();
 	benchmark_db_schema();
 
 	// Item client
