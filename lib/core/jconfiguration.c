@@ -451,7 +451,6 @@ j_configuration_new_for_data(GKeyFile* key_file)
 	rdma_hints = fi_allocinfo();
 	rdma_hints->caps = rdma_caps | rdma_necessary_caps; // necessary for julea rdma
 	rdma_hints->mode = 0;
-	rdma_hints->ep_attr->type = FI_EP_MSG;
 
 	rdma_hints->addr_format = FI_FORMAT_UNSPEC;
 	rdma_hints->fabric_attr->prov_name = g_strdup(rdma_prov_name);
