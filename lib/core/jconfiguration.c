@@ -433,12 +433,11 @@ j_configuration_new_for_data(GKeyFile* key_file)
 	client_flags = FI_NUMERICHOST;
 
 	// julea intern config for msg
-	msg_necessary_caps = 0;
+	msg_necessary_caps = FI_MSG; // TODO: more necessary flags?
 	msg_hints = fi_allocinfo();
 	msg_hints->caps = msg_caps | msg_necessary_caps;
 	msg_hints->mode = 0;
-	msg_hints->ep_attr->type = FI_EP_MSG; //sets endpoint type to reliable connection oriented, so no datagram endpoints will be present
-	msg_hints->addr_format = FI_SOCKADDR_IN; // sets address format to sockaddr_in
+	msg_hints->addr_format = FI_FORMAT_UNSPEC;
 	msg_hints->fabric_attr->prov_name = g_strdup(msg_prov_name);
 	msg_hints->domain_attr->threading = FI_THREAD_SAFE;
 	msg_hints->tx_attr->op_flags = FI_COMPLETION;
@@ -453,7 +452,8 @@ j_configuration_new_for_data(GKeyFile* key_file)
 	rdma_hints->caps = rdma_caps | rdma_necessary_caps; // necessary for julea rdma
 	rdma_hints->mode = 0;
 	rdma_hints->ep_attr->type = FI_EP_MSG;
-	rdma_hints->addr_format = FI_SOCKADDR_IN;
+
+	rdma_hints->addr_format = FI_FORMAT_UNSPEC;
 	rdma_hints->fabric_attr->prov_name = g_strdup(rdma_prov_name);
 	rdma_hints->domain_attr->threading = FI_THREAD_SAFE;
 	rdma_hints->domain_attr->mr_mode = FI_MR_ALLOCATED; // | // memory regions need to be allocated
@@ -542,14 +542,14 @@ j_configuration_new_for_data(GKeyFile* key_file)
 	//if neither a special provider is required NOR required capabilities are specified the sockets provider is used
 	if (configuration->libfabric.get_info.msg_hints->fabric_attr->prov_name == NULL && configuration->libfabric.get_info.msg_hints->caps == msg_necessary_caps)
 	{
-		// g_printf("\nNeither Capabilities nor Provider requested, sockets provider will be used for message data transfer\n");
+		g_message("\nNeither Capabilities nor Provider requested, sockets provider will be used for message data transfer\n");
 		configuration->libfabric.get_info.msg_hints->fabric_attr->prov_name = g_strdup("sockets");
 	}
 
 	//if neither a special provider is required NOR required capabilities are specified the sockets provider is used
 	if (configuration->libfabric.get_info.rdma_hints->fabric_attr->prov_name == NULL && configuration->libfabric.get_info.rdma_hints->caps == rdma_necessary_caps)
 	{
-		// g_printf("\nNeither Capabilities nor Provider requested, sockets provider will be used for rdma data transfer\n");
+		g_message("\nNeither Capabilities nor Provider requested, sockets provider will be used for rdma data transfer\n");
 		configuration->libfabric.get_info.rdma_hints->fabric_attr->prov_name = g_strdup("sockets");
 	}
 
@@ -925,6 +925,7 @@ check_prov_name_validity(gchar* prov_name, JConnectionType connection_type)
 			g_assert_not_reached();
 	}
 
+	// FIXME: support everything
 	libfabric_provs[0] = "gni";
 	libfabric_provs[1] = "psm";
 	libfabric_provs[2] = "psm2";

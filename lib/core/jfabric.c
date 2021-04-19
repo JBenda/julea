@@ -67,7 +67,7 @@ j_fabric_init(JFabric** jfabric, JRequestType req_type, JConfiguration* configur
 			   NULL,
 			   j_configuration_get_fi_service(configuration),
 			   j_configuration_get_fi_flags(configuration, req_type),
-			   j_configuration_fi_get_hints(configuration, J_RDMA),
+			   NULL, // j_configuration_fi_get_hints(configuration, J_RDMA),
 			   &(*jfabric)->rdma_info);
 	if (error != 0)
 	{
@@ -81,6 +81,7 @@ j_fabric_init(JFabric** jfabric, JRequestType req_type, JConfiguration* configur
 	}
 
 	//Init fabric
+	g_message("init msg fabirc: %s", (*jfabric)->msg_info->fabric_attr->name);
 	error = fi_fabric((*jfabric)->msg_info->fabric_attr, &(*jfabric)->msg_fabric, NULL);
 	if (error != FI_SUCCESS)
 	{

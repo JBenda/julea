@@ -254,12 +254,13 @@ j_libfabric_ress_init(GSList** pep_list, struct fid_eq** passive_ep_event_queue)
 		ip_problem = FALSE;
 
 		// check if entry is of AF_INET family
-		if (current_own_addr->ifa_addr->sa_family != AF_INET)
+/*		if (current_own_addr->ifa_addr->sa_family != AF_INET)
 		{
 			ip_problem = TRUE;
 		}
 		else
 		{
+			g_message("test %s", current_own_addr->ifa_name);
 			// check if entry is already in pep_list
 			if (*pep_list != NULL)
 			{
@@ -274,7 +275,7 @@ j_libfabric_ress_init(GSList** pep_list, struct fid_eq** passive_ep_event_queue)
 					}
 				}
 			}
-		}
+		}*/
 
 		if (!ip_problem)
 		{
@@ -282,6 +283,7 @@ j_libfabric_ress_init(GSList** pep_list, struct fid_eq** passive_ep_event_queue)
 			struct fi_info* info;
 
 			//get fi_info
+			g_message("Server address: %s @ %s", inet_ntoa(((struct sockaddr_in*)current_own_addr->ifa_addr)->sin_addr), current_own_addr->ifa_name);
 			error = fi_getinfo(j_configuration_get_fi_version(jd_configuration),
 					   inet_ntoa(((struct sockaddr_in*)current_own_addr->ifa_addr)->sin_addr),
 					   j_configuration_get_fi_service(jd_configuration),
@@ -529,7 +531,9 @@ main(int argc, char** argv)
 			event = 0;
 			event_entry = malloc(event_entry_size);
 
+			// g_message("sread start");
 			fi_error = fi_eq_sread(passive_ep_event_queue, &event, event_entry, event_entry_size, 1000, 0); //timeout 5th argument in ms
+			// g_message("sread fin");
 			if (fi_error < 0)
 			{
 				if (fi_error == -FI_EAVAIL)
@@ -675,6 +679,7 @@ main(int argc, char** argv)
 						if (((struct sockaddr_in*)pep_list_entry->info->src_addr)->sin_addr.s_addr == ((struct sockaddr_in*)j_thread_data_get_msg_event(thread_data)->info->src_addr)->sin_addr.s_addr
 						    && ((struct sockaddr_in*)pep_list_entry->info->src_addr)->sin_port == ((struct sockaddr_in*)j_thread_data_get_msg_event(thread_data)->info->src_addr)->sin_port)
 						{
+							g_message("reject");
 							fi_error = fi_reject(pep_list_entry->pep, j_thread_data_get_msg_event(thread_data)->fid, NULL, 0);
 							fi_freeinfo(j_thread_data_get_msg_event(thread_data)->info);
 							free(j_thread_data_get_msg_event(thread_data));
@@ -686,6 +691,7 @@ main(int argc, char** argv)
 						pep_list_entry = g_slist_nth_data(pep_list, n);
 						if (((struct sockaddr_in*)pep_list_entry->info->src_addr)->sin_addr.s_addr == ((struct sockaddr_in*)j_thread_data_get_rdma_event(thread_data)->info->src_addr)->sin_addr.s_addr && ((struct sockaddr_in*)pep_list_entry->info->src_addr)->sin_port == ((struct sockaddr_in*)j_thread_data_get_rdma_event(thread_data)->info->src_addr)->sin_port)
 						{
+							g_message("reject");
 							fi_error = fi_reject(pep_list_entry->pep, j_thread_data_get_rdma_event(thread_data)->fid, NULL, 0);
 							fi_freeinfo(j_thread_data_get_rdma_event(thread_data)->info);
 							free(j_thread_data_get_rdma_event(thread_data));

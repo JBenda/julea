@@ -403,6 +403,7 @@ j_endpoint_connect(JEndpoint* jendpoint, struct sockaddr_in* address, const gcha
 	j_con_data_set_con_type(con_data, J_MSG);
 
 	// connect msg endpoint
+	address->sin_addr.s_addr = inet_addr("127.0.0.1");
 	error = fi_connect(jendpoint->msg.ep, address, (void*)con_data, sizeof(struct JConData));
 	if (error == -FI_ECONNREFUSED)
 	{

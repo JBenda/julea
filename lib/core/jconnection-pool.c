@@ -385,6 +385,7 @@ hostname_resolver(const char* hostname, const char* service, struct addrinfo** a
 
 	ret = FALSE;
 
+	g_message("host: %s, ser: %s", hostname, service);
 	error = getaddrinfo(hostname, service, hints, addrinfo_ret);
 	if (error != 0)
 	{
@@ -448,6 +449,7 @@ hostname_connector(const char* hostname, const char* service, JEndpoint** jendpo
 		address = (struct sockaddr_in*)addrinfo->ai_addr;
 
 		//TODO change ubuntu workaround to something senseable
+		//FIXME: libfabric use
 		if (g_strcmp0(inet_ntoa(address->sin_addr), "127.0.1.1") == 0)
 		{
 			inet_aton("127.0.0.1", &address->sin_addr);
