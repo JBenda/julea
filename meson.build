@@ -553,6 +553,13 @@ executable('julea-server', julea_server_srcs,
 	install: true,
 )
 
+vanillaLibfabric = files([
+  'example/vanillaLibfabric.c'
+])
+
+executable('vanilla-fabric-test', vanilla_libfabric_src,
+  dependencies: [libfabric_dep])
+
 julea_backends = [
 	'object/gio',
 	'object/null',
