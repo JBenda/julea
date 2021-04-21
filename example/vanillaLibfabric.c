@@ -4,13 +4,36 @@
 #include <rdma/fi_rma.h>
 #include <rdma/fi_cm.h>
 
-int main(void);
+#define EVENT_SIZE 512
+struct my_event {
+	uint32_t type;
+	void* data;
+};
+
+struct passive_connection {
+	struct fi_info* info;
+	struct fid_fabric* provider;
+	struct fid_pep* passive_endpoint;
+	struct fid_eq* event_queue;
+};
+
+struct active_connection {
+	struct fid_ep* endpoint;
+	struct fid_cq* content_queue;
+};
+
+int main(int argc, char** argv);
 void printFabrics(struct fi_info*);
 void printAddressTypes(void);
 struct fi_info* findInfo(void);
 struct fid_fabric* createProvider(struct fi_info*);
 struct fid_pep* createPassiveEndpoint(struct fi_info*, struct fid_fabric*);
-struct fid_eq* openEventQueue(struct fid_fabric*);
+struct fid_eq* newEventQueue(struct fid_fabric*);
+int setupPassiveConnection(struct passive_connection*);
+int closePassiveConnection(struct passive_connection*);
+int etablishConnection(struct active_connection*,  struct fid_fabric*,  struct fi_eq_cm_entry*);
+void runServer(void);
+void runClient(void);
 
 void printAddressTypes() {
 	g_print(
@@ -112,7 +135,7 @@ struct fid_pep* createPassiveEndpoint(
 	return result;
 }
 
-struct fid_eq* openEventQueue(struct fid_fabric* provider) {
+struct fid_eq* newEventQueue(struct fid_fabric* provider) {
 	struct fid_eq* result;
 	struct fi_eq_attr attr = {
 		.size = 0,
@@ -133,34 +156,180 @@ struct fid_eq* openEventQueue(struct fid_fabric* provider) {
 	return result;
 }
 
-int main() {
+struct fid_cq* newContentQueue(struct fid_domain* domain) {
+	int error;
+	struct fi_cq_attr attr;
+	struct fid_cq* result;
+
+	error = fi_cq_open(domain, &attr, &result, &result);
+	if (error < 0) {
+		g_critical("Failed to create Content Queue, with:\n\t%s",
+				fi_strerror(abs(error)));
+		return NULL;
+	}
+	return result;
+}
+
+int setupPassiveConnection(struct passive_connection* connection) {
 	struct fi_info* info;
 	struct fid_fabric* provider;
 	struct fid_pep* passive_endpoint;
 	struct fid_eq* event_queue;
 	int error;
 
-	if(!(info = findInfo())) { goto end; }
-	if(!(provider = createProvider(info))) { goto end; }
-	if(!(passive_endpoint = createPassiveEndpoint(info, provider))) { goto end; }
-	if(!(event_queue = openEventQueue(provider))) { goto end; }
+	if(!(info = findInfo())) { goto fail; }
+	if(!(provider = createProvider(info))) { goto fail; }
+	if(!(passive_endpoint = createPassiveEndpoint(info, provider))) { goto fail; }
+	if(!(event_queue = newEventQueue(provider))) { goto fail; }
 
 	// ep must be socket type to support connection managment events
 	// https://ofiwg.github.io/libfabric/master/man/fi_endpoint.3.html
-	error = fi_pep_bind(passive_endpoint,  &provider->fid, 0);
+	error = fi_pep_bind(passive_endpoint,  &event_queue->fid, 0);
 	if(error != 0) {
 		g_critical("Failing to bind endpoint, with:\n\t%s",
 				fi_strerror(abs(error)));
-		goto end;
+		goto fail;
 	}
 	error = fi_listen(passive_endpoint);
 	if (error != 0) {
 		g_critical("Failed to setting passive endpoint to listen, with:\n\t%s",
 				fi_strerror(abs(error)));
-		goto end;
+		goto fail;
 	}
-	g_print("Setup Passive Endpoint, can recive connections now :)");
+	g_message("Setup Passive Endpoint, can recive connections now :)");
 
-end:
-	fi_freeinfo(info);
+	connection->event_queue = event_queue;
+	connection->info = info;
+	connection->passive_endpoint = passive_endpoint;
+	connection->provider = provider;
+
+	return 0;
+fail:
+	return 1;
 }
+
+int closePassiveConnection(struct passive_connection* connection) {
+	int error;
+	if((error = fi_close(&connection->passive_endpoint->fid)) != 0) {
+		g_critical("Failed to close passive endpoint, with:\n\t%s",
+				fi_strerror(abs(error)));
+		return 1;
+	}
+	if((error = fi_close(&connection->provider->fid)) != 0) {
+		g_critical("Failed to close provider, with:\n\t%s",
+				fi_strerror(abs(error)));
+		return 1;
+	}
+	return 0;
+}
+
+
+int readEvent(struct passive_connection* connection, struct my_event* event) {
+	int error;
+	struct fi_eq_err_entry event_queue_err;
+
+	error = fi_eq_sread(connection->event_queue, &event->type, event->data, EVENT_SIZE, 1000, 0);
+	if (error < 0) {
+		if (error == -FI_EAVAIL) {
+			error = fi_eq_readerr(connection->event_queue, &event_queue_err, 0);
+			if (error < 0) {
+				g_critical("Error while reading error from event queue:\n\t%s",
+						fi_strerror(abs(error)));
+			} else {
+				g_critical("Error message on event queue:\n\t%s",
+						fi_eq_strerror(
+							connection->event_queue,
+							event_queue_err.prov_errno,
+							event_queue_err.err_data,
+							NULL,
+							0));
+			}
+		}
+		return -1;
+	} else {
+		return error;
+	}
+}
+
+int etablishConnection(struct active_connection* connection, struct fid_fabric* provider, struct fi_eq_cm_entry* request) {
+	int error;
+	struct fid_domain* domain;
+
+	fi_domain(provider, request->info, &domain, NULL);
+	g_message("Got connection request!");
+	error = fi_endpoint(
+				NULL,
+				request->info,
+				&connection->endpoint,
+				NULL);
+	fi_freeinfo(request->info);
+	if (error < 0) {
+		g_critical("Failed to create endpoint for connection, with\n\t%s",
+				fi_strerror(abs(error)));
+		return -1;
+	}
+
+	if(!(connection->content_queue = newContentQueue(domain))) {
+		fi_close(&connection->endpoint->fid);
+		return -1;
+	}
+	error = fi_ep_bind(connection->endpoint, &connection->content_queue->fid, 0); 
+	if (error < 0) {
+		g_critical("Failed to bind active endpoint, with\n\t%s",
+				fi_strerror(abs(error)));
+		return -1;
+	}
+
+	fi_accept(connection->endpoint, NULL, 0);
+	return 0;
+}
+
+void runServer() {
+	int read;
+	struct passive_connection connection;
+	struct my_event event;
+
+	event.data = malloc(EVENT_SIZE);
+
+	if(setupPassiveConnection(&connection) != 0) {
+		g_critical("Failed to setup passive connection!");
+		goto fail;
+	}
+
+	do {
+		if((read = readEvent(&connection, &event)) >= 0) {
+			if (event.type == FI_CONNREQ) {
+				struct active_connection new_connection;
+				etablishConnection(
+						&new_connection,
+						connection.provider,
+						(struct fi_eq_cm_entry*)event.data);
+			}
+		}
+	} while(1);
+
+
+
+	if(closePassiveConnection(&connection)) { goto fail; }
+fail:
+	return;
+}
+
+void runClient() {
+}
+
+int main(int argc, char** argv) {
+	if (argc != 2) {
+		g_critical("usage: cmd [server|client]");
+		return 1;
+	}
+	if (strcmp(argv[1], "server") == 0) {
+		runServer();
+	} else if (strcmp(argv[1], "client")) {
+		runClient();
+	} else {
+		g_critical("expected server or client, got '%s'", argv[1]);
+		return 1;
+	}
+	return 0;
+
