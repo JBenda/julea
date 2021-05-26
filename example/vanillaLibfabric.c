@@ -48,14 +48,17 @@ struct {
 	struct fid_cq* txcq;
 	struct fid_cq* rxcq;
 	void* ctx;
-	struct fi_endpoint* ep;
-	struct fi_endpoint* pep;
+	struct fid_ep* ep;
+	struct fid_pep* pep;
 	struct fi_info* fi;
+	struct fi_info* fi_pep;
 	struct fid_fabric* fabric;
 	struct fid_eq* eq;
-	struct fid_eq_attr eq_attr;
+	struct fi_eq_attr eq_attr;
 	struct fid_domain* domain;
 	struct fid_av* av;
+	struct fid_mr* mr;
+	fi_addr_t local_fi_addr, remote_fi_addr;
 } ct;
 
 void free_ct(void);
@@ -65,6 +68,11 @@ void init_server(void);
 void msg_client(void);
 void msg_server(void);
 int parse_address(char* address, uint16_t port,  struct addrinfo** result);
+void server_connect(void);
+char verify_cq(uint64_t msg_len);
+struct fi_info* get_info(void);
+void open_ep(void);
+void client_connect(void);
 
 void free_ct(void) {
 	if(ct.hints) {
@@ -122,7 +130,8 @@ void init_client(void) {
 	}
 	freeaddrinfo(address);
 }
-bool verify_cq(uint64_t msg_len) {
+char verify_cq(uint64_t msg_len) {
+	int ret;
 	struct fi_cq_err_entry comp;
 	uint64_t msg_cnt = 0;
 
@@ -130,23 +139,27 @@ bool verify_cq(uint64_t msg_len) {
 		ret = fi_cq_read(ct.txcq, &comp, 1);
 		if(ret < 0 && ret != -FI_EAGAIN) {
 			g_error("failed to verify len!");
-			return; 
+			return 0; 
 		}
 		msg_cnt += ret;
 	}
+	return 1;
 }
 
-struct fi_info* get_info() {
+struct fi_info* get_info(void) {
 	struct fi_info* info;
-	fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), NULL, NULL, 0, &ct.hints, &info);
+	fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), NULL, NULL, 0, ct.hints, &info);
 	// maybe setup ct.rx_ctx_ptr
+	return info;
 }
 
-void open_ep() {
+void open_ep(void) {
 	// open endpoint!
-	struct cq_attr attrs;
+	int ret;
+	struct fi_cq_attr attrs;
+	struct fi_av_attr a_attrs;
 	attrs.wait_obj = FI_WAIT_NONE;
-	attr.size = ct.fi->tx_attr->size;
+	attrs.size = ct.fi->tx_attr->size;
 	ret = fi_cq_open(ct.domain, &attrs, &ct.txcq, &ct.txcq);
 	if(ret) { g_error("failed to open tx c queue"); return; }
 	attrs.size = ct.fi->rx_attr->size;
@@ -157,36 +170,34 @@ void open_ep() {
 		g_error("wong ep type!"); return; }
 	if(endpoint_type == FI_EP_RDM || endpoint_type == FI_EP_DGRAM) {
 		if(ct.fi->domain_attr->av_type != FI_AV_UNSPEC) {
-			ct.av_attr.type = ct.fi->domain_attr->av_type;
+			a_attrs.type = ct.fi->domain_attr->av_type;
 		}
-		ret = fi_av_open(ct->domain, &ct.av_attr, ct.av, NULL);
+		ret = fi_av_open(ct.domain, &a_attrs, &ct.av, NULL);
 		if(ret) { g_error("failed to open av!"); return; }
 	}
-	if (fi->tx_attr->mode & FI_MSG_PREFIX)
+	if (ct.fi->tx_attr->mode & FI_MSG_PREFIX)
 	{g_error("hanlde prefixes!"); return; }
-	if (fi->rx_attr->mode & FI_MSG_PREFIX)
+	if (ct.fi->rx_attr->mode & FI_MSG_PREFIX)
 	{g_error("hanlde prefixes!"); return; }
 	ret = fi_endpoint(ct.domain, ct.fi, &ct.ep, NULL);
 	if(ret) { g_error("failed to open endpoint!"); return; }
 }
 
-void client_connect() {
-	struct fi_eq_cm_enrty entry;
+void client_connect(void) {
+	struct fi_eq_cm_entry entry;
 	uint32_t event;
-	ssize_t rd;
 	int ret;
 	const char* name; // rem_name
 
 	// read name len
 	uint32_t len;
-	read(ct.ctrl_connfd, &len, sizeof(len));
+	recv(ct.ctrl_connfd, (char*)&len, sizeof(len), 0);
 	len = ntohl(len);
 
 	// read addr format and addr
-	read(ct.ctrl_connfd, ct.hints->addr_format, sizeof(ct->hints->addr_format));
+	recv(ct.ctrl_connfd, (char*)&ct.hints->addr_format, sizeof(ct.hints->addr_format), 0);
 	ct.hints->dest_addr = malloc(len);
 	ct.hints->dest_addrlen = len;
-	pp_ctrl_recv(ct, name, len);
 
 
 	ct.fi = get_info();
@@ -201,31 +212,31 @@ void client_connect() {
 
 
 	if(endpoint_type == FI_EP_MSG) {
-		ret = fi_ep_bind(ct.ep, ct.eq, 0);
+		ret = fi_ep_bind(ct.ep, &ct.eq->fid, 0);
 		if(ret) { g_error("failed to bind eq!"); return; }
 	} else {
-		ret = fi_ep_bind(ct.ep, ct.av, 0);
+		ret = fi_ep_bind(ct.ep, &ct.av->fid, 0);
 		if(ret) { g_error("failed to bind av!"); return; }
 	}
-	ret = fi_ep_bind(ct.ep, ct.txcq, FI_TRANSMIT);
+	ret = fi_ep_bind(ct.ep, &ct.txcq->fid, FI_TRANSMIT);
 	if(ret) { g_error("failed to bind tx!"); return; }
-	ret = fi_ep_bind(ct.ep, ct.rxcq, FI_RECV);
+	ret = fi_ep_bind(ct.ep, &ct.rxcq->fid, FI_RECV);
 	if(ret) { g_error("failed to bind rx!"); return; }
 	ret = fi_enable(ct.ep);
 	if(ret) { g_error("failed to enable ep!"); return; }
 
 	ret = fi_connect(ct.ep, name, NULL, 0);
-	if(ret) { g_erron("failed to connect!"); return; }
-	ret = fi_eq_sread(ct.eq, &event, &enrty, sizeof(enrty), -1, 0);
+	if(ret) { g_error("failed to connect!"); return; }
+	ret = fi_eq_sread(ct.eq, &event, &entry, sizeof(entry), -1, 0);
 	if(ret != sizeof(entry)) {
 		g_error("failed read connetcion result!"); return; }
-	if(event != FI_CONNECTED || enrty.fid != &ct->ep->fid) {
+	if(event != FI_CONNECTED || entry.fid != &ct.ep->fid) {
 		g_error("connection denied!"); return;
 	}
 }
 
-void server_connect() {
-	srtuct fi_eq_cm_entry entry;
+void server_connect(void) {
+	struct fi_eq_cm_entry entry;
 	uint32_t event;
 	size_t addrlen = 0;
 	uint32_t len = 0;
@@ -257,9 +268,9 @@ void server_connect() {
 	if(ret) { g_error("failed to fetch name!"); return; }
 
 	len = htonl(addrlen);
-	send(ct.ctrl_connfd, (char*)&len, sizeof(len));
-	send(ct.ctrl_connfd, &ct->fi_pep->addr_format, sizeof(ct->fi_pep->addr_format));
-	send(ct.ctrl_connfd,name, addrlen);
+	send(ct.ctrl_connfd, (char*)&len, sizeof(len), 0);
+	send(ct.ctrl_connfd, &ct.fi_pep->addr_format, sizeof(ct.fi_pep->addr_format), 0);
+	send(ct.ctrl_connfd,name, addrlen, 0);
 	
 	// wait for client
 	ret = fi_eq_sread(ct.eq, &event, &entry, sizeof(entry), -1, 0);
@@ -279,8 +290,8 @@ void server_connect() {
 	if(ret) { g_error("failed to accept!"); return; }
 
 	ret = fi_eq_sread(ct.eq, &event, &entry, sizeof(entry), -1, 0);
-	if(ret != sizeof(enrty)) { g_error("failed to read accept!"); return; }
-	if(event != FI_CONNECTED | entry.fid != &ct->ep->fid) {
+	if(ret != sizeof(entry)) { g_error("failed to read accept!"); return; }
+	if(event != FI_CONNECTED | entry.fid != &ct.ep->fid) {
 		g_error("no accept message?"); return;
 	}
 
@@ -315,6 +326,8 @@ void msg_client(void){
 }
 
 void msg_server(){
+	int ret;
+
 	init_server();
 	server_connect();
 
@@ -333,7 +346,7 @@ void msg_server(){
 		if(!ret) break;
 		if(ret != -FI_EAGAIN) { g_error("recive failed!"); return; }
 	}
-	verify_cq(msg_len);	
+	if(!verify_cq(msg_len)) { g_error("verification failed!"); return; }
 	g_message("recived message: %s", rx_buf);
 
 }
