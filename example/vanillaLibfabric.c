@@ -23,7 +23,7 @@
 
 const char provider_name[] = "verbs";
 const char server_address[] = "10.0.10.1";
-const enum fi_ep_type endpoint_type = FI_EP_MSG; // FI_EP_MSG // FI_EP_RDM // FI_EP_DGRAM
+enum fi_ep_type endpoint_type = FI_EP_RDM; // FI_EP_MSG // FI_EP_RDM // FI_EP_DGRAM
 const char message[] = "Hello :)"; 
 const uint32_t server_port = 47592;
 
@@ -80,7 +80,13 @@ void client_connect(void);
 void init_server(void);
 void init_ep(void);
 void init_mr(void);
-int remaining_bytes_cq(void);
+void send_name(struct fi_info* p_info, struct fid* ep);
+void run_rdm(void);
+void rdm_server(void);
+void rdm_client(void);
+void test_read(void);
+void test_send(void);
+void read_name(void);
 
 void free_ct(void) {
 	if(ct.hints) {
@@ -249,11 +255,8 @@ void init_ep(void) {
 	if(ret) { g_error("failed to enable ep!"); return; }
 }
 
-void client_connect(void) {
-	struct fi_eq_cm_entry entry;
-	uint32_t event;
+void read_name(void) {
 	int ret;
-
 	// read name len
 	uint32_t len;
 	ret = recv(ct.ctrl_connfd, (char*)&len, sizeof(len), 0);
@@ -277,7 +280,14 @@ void client_connect(void) {
 		g_error("failed to recive addr! (%d)", ret);
 		return;
 	}
+}
 
+void client_connect(void) {
+	struct fi_eq_cm_entry entry;
+	uint32_t event;
+	int ret;
+
+	read_name();
 
 	ct.fi = get_info();
 	ret = fi_fabric(ct.fi->fabric_attr, &(ct.fabric), NULL);
@@ -301,36 +311,22 @@ void client_connect(void) {
 	}
 }
 
-void server_connect(void) {
-	struct fi_eq_cm_entry entry;
-	uint32_t event;
-	size_t addrlen = 0;
-	uint32_t len = 0;
+void send_name(struct fi_info* p_info, struct fid* ep) {
 	int ret;
-	struct fi_info* p_info;
-	void* name = NULL;
-
-	p_info = get_info();
-	ret = fi_fabric(p_info->fabric_attr, &ct.fabric, NULL);
-	if(ret) { g_error("failed to create fabric"); return; }
-	ret = fi_eq_open(ct.fabric, &ct.eq_attr, &ct.eq, NULL);
-	if(ret) { g_error("failed to create eq"); return; }
-	ret = fi_passive_ep(ct.fabric, p_info, &ct.pep, NULL);
-	if(ret) { g_error("failed to create pep"); return; }
-	ret = fi_pep_bind(ct.pep, &ct.eq->fid, 0);
-	if(ret) { g_error("failed to bind pep"); return; }
-	ret = fi_listen(ct.pep);
-	if(ret) { g_error("failet do start listen!"); return; }
-
+	void* name;
+	size_t addrlen;
+	uint32_t len;
 
 	// send name
-	ret = fi_getname(&ct.pep->fid, NULL, &addrlen);
+	addrlen = 16;
+	// FIXME!
+	/*ret = fi_getname(ep, NULL, &addrlen);
 	if((ret != -FI_ETOOSMALL) || (addrlen <= 0)) {
 		g_error("failed to fetch name len!");
 		return;
-	}
+	}*/
 	name = malloc(addrlen);
-	ret = fi_getname(&ct.pep->fid, name, &addrlen);
+	ret = fi_getname(ep, name, &addrlen);
 	if(ret) { g_error("failed to fetch name!"); return; }
 
 	len = htonl(addrlen);
@@ -344,6 +340,27 @@ void server_connect(void) {
 	if(ret == -1 || ret != 16) {
 		g_error("failed to send addr!(%d)", ret); return;
 	}
+}
+
+void server_connect(void) {
+	struct fi_eq_cm_entry entry;
+	uint32_t event;
+	int ret;
+	struct fi_info* p_info;
+
+	p_info = get_info();
+	ret = fi_fabric(p_info->fabric_attr, &ct.fabric, NULL);
+	if(ret) { g_error("failed to create fabric"); return; }
+	ret = fi_eq_open(ct.fabric, &ct.eq_attr, &ct.eq, NULL);
+	if(ret) { g_error("failed to create eq"); return; }
+	ret = fi_passive_ep(ct.fabric, p_info, &ct.pep, NULL);
+	if(ret) { g_error("failed to create pep"); return; }
+	ret = fi_pep_bind(ct.pep, &ct.eq->fid, 0);
+	if(ret) { g_error("failed to bind pep"); return; }
+	ret = fi_listen(ct.pep);
+	if(ret) { g_error("failet do start listen!"); return; }
+
+	send_name(p_info, &(ct.pep->fid));
 	
 	// wait for client
 	ret = fi_eq_sread(ct.eq, &event, &entry, sizeof(entry), -1, 0);
@@ -375,40 +392,11 @@ void server_connect(void) {
 
 
 void msg_client(void){
-	int ret;
-	char* tx_buf;
-	const uint64_t msg_len = sizeof(message);
-
-
 	init_client();
 	client_connect();
 
-	if(ct.mr == &ct.no_mr) {
-		tx_buf = malloc(msg_len);
-	} else {
-		tx_buf = ct.buf;
-	}
-	g_message("tx_buf: %p", (void*)tx_buf);
-	
-	// maybe sync?
-	
-	// sending a message
-	memcpy(tx_buf, message, msg_len);
-	while(1) { 
-		ret = fi_send(
-				ct.ep,
-				tx_buf,
-				msg_len,
-				fi_mr_desc(ct.mr),
-				ct.remote_fi_addr,
-				ct.ctx);
-		if(!ret) break;
-		if(ret != -FI_EAGAIN) { g_error("send failed!"); return; }
-	}
-	if(!verify_cq(ct.txcq, 1)) {
-		g_error("failed to verifycq!");
-		return;
-	}
+	test_send();
+
 	g_message("client msg finished!");
 }
 
@@ -454,14 +442,43 @@ void init_server(void) {
 	// close(listendfd);
 }
 
-void msg_server(void){
+void test_send(void) {
+	int ret;
+	char* tx_buf;
+	const uint64_t msg_len = sizeof(message);
+
+	if(ct.mr == &ct.no_mr) {
+		tx_buf = malloc(msg_len);
+	} else {
+		tx_buf = ct.buf;
+	}
+	g_message("tx_buf: %p", (void*)tx_buf);
+	
+	// maybe sync?
+	
+	// sending a message
+	memcpy(tx_buf, message, msg_len);
+	while(1) { 
+		ret = fi_send(
+				ct.ep,
+				tx_buf,
+				msg_len,
+				fi_mr_desc(ct.mr),
+				ct.remote_fi_addr,
+				ct.ctx);
+		if(!ret) break;
+		if(ret != -FI_EAGAIN) { g_error("send failed!"); return; }
+	}
+	if(!verify_cq(ct.txcq, 1)) {
+		g_error("failed to verifycq!");
+		return;
+	}
+}
+
+void test_read(void) {
 	int ret;
 	char* rx_buf;
 	const uint64_t msg_len = sizeof(message);
-
-
-	init_server();
-	server_connect();
 
 	if(ct.mr == &ct.no_mr) {
 		rx_buf = malloc(sizeof(message));
@@ -492,30 +509,76 @@ void msg_server(void){
 		g_print("%i ", rx_buf[i]);
 	}
 	g_print("\n");
-	// g_message("bytes remaining: %i", remaining_bytes_cq());
 }
 
-int remaining_bytes_cq(void) {
-	int ret;
-	struct fi_cq_err_entry comp;
-	uint64_t msg_cnt = 0;
+void msg_server(void){
 
-	while(1) {
-		ret = fi_cq_read(ct.txcq, &comp, 1);
-		if(ret > 0)  {
-			msg_cnt += ret;
-			g_message("remain(tmp): %lu", msg_cnt);
-		} else if(ret < 0 && ret != -FI_EAGAIN) {
-			g_error("failed to verify len!");
-			return msg_cnt; 
-		}
-	}
-	return msg_cnt;
+	init_server();
+	server_connect();
+
+	test_read();
 }
 
 void run_msg(void) {
 	if(ct.is_server) {msg_server();}
 	else {msg_client();}
+}
+
+void rdm_client(void) {
+	int ret;
+
+	init_client();
+	read_name();
+	ct.fi = get_info();
+	ret = fi_fabric(ct.fi->fabric_attr, &(ct.fabric), NULL);
+	if(ret) { g_error("failed to open fabric!"); return; }
+	ret = fi_eq_open(ct.fabric, &(ct.eq_attr), &(ct.eq), NULL);
+	if(ret) { g_error("failed to open eq!"); return; }
+	ret = fi_domain(ct.fabric, ct.fi, &(ct.domain), NULL);
+	if(ret) { g_error("faileod to open domain!"); return; }
+
+	init_mr();
+	open_ep();
+	init_ep();
+	send_name(ct.fi, &ct.ep->fid);
+
+	if(ct.fi->domain_attr->caps & FI_LOCAL_COMM) { g_message("todo: check?"); }
+	ret = fi_av_insert(ct.av, ct.hints->dest_addr, 1, &(ct.remote_fi_addr), 0, NULL);
+	if(ret < 0 || ret != 1) { g_error("[s:%i]av insert failed!", ct.is_server); return; }
+
+	test_send();
+
+	g_message("client rdm finished!");
+}
+
+void rdm_server(void) {
+	int ret;
+
+	init_server();
+	ct.fi = get_info();
+	ret = fi_fabric(ct.fi->fabric_attr, &(ct.fabric), NULL);
+	if(ret) { g_error("failed to open fabric!"); return; }
+	ret = fi_eq_open(ct.fabric, &(ct.eq_attr), &(ct.eq), NULL);
+	if(ret) { g_error("failed to open eq!"); return; }
+	ret = fi_domain(ct.fabric, ct.fi, &(ct.domain), NULL);
+	if(ret) { g_error("faileod to open domain!"); return; }
+
+	init_mr();
+	open_ep();
+	init_ep();
+	send_name(ct.fi, &ct.ep->fid);
+	read_name();
+
+	if(ct.fi->domain_attr->caps & FI_LOCAL_COMM) { g_message("todo: check?"); }
+	ret = fi_av_insert(ct.av, ct.hints->dest_addr, 1, &(ct.remote_fi_addr), 0, NULL);
+	if(ret < 0 || ret != 1) { g_error("[s:%i]av insert failed!", ct.is_server); return; }
+
+	test_read();
+}
+
+void run_rdm(void) {
+	if(ct.is_server) { rdm_server();}
+	else {rdm_client(); }
 }
 
 
@@ -525,10 +588,13 @@ int main(int argc, char** argv) {
 	char* s_address = malloc(sizeof(server_address));
 	int ret = EXIT_SUCCESS;
 
-	if (argc != 2) { g_error("expect 1 argument [client|server]"); return EXIT_FAILURE; }
+	if (argc != 3) { g_error("expect 1 argument [client|server] [msg|rdm]"); return EXIT_FAILURE; }
 	if(strcmp(argv[1], "client") == 0) { ct.is_server = 0; }
 	else if (strcmp(argv[1], "server") == 0) { ct.is_server = 1; }
 	else { g_error("expect client or server, not '%s'.", argv[1]); return EXIT_FAILURE; }
+	if(strcmp(argv[2], "msg") == 0) { endpoint_type = FI_EP_MSG; }
+	else if(strcmp(argv[2], "rdm") == 0) { endpoint_type = FI_EP_RDM; }
+	else { g_error("expected msg or rdm, not '%s'", argv[2]); return EXIT_FAILURE; }
 
 	memcpy(p_name, provider_name, sizeof(provider_name));
 	memcpy(s_address, server_address, sizeof(server_address));
@@ -546,6 +612,7 @@ int main(int argc, char** argv) {
 
 	switch (endpoint_type) {
 	case FI_EP_MSG: run_msg(); break;
+	case FI_EP_RDM: run_rdm(); break;
 	default: g_error("Endpoint not supported!"); ret = EXIT_FAILURE;
 	}
 	fi_shutdown(ct.ep,0);
