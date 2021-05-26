@@ -1,335 +1,380 @@
 #include <glib.h>
+
 #include <rdma/fabric.h>
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_cm.h>
 
-#define EVENT_SIZE 512
-struct my_event {
-	uint32_t type;
-	void* data;
-};
 
-struct passive_connection {
-	struct fi_info* info;
-	struct fid_fabric* provider;
-	struct fid_pep* passive_endpoint;
-	struct fid_eq* event_queue;
-};
+// build connection
+#include <sys/socket.h>
 
-struct active_connection {
-	struct fid_ep* endpoint;
-	struct fid_cq* content_queue;
-};
+// parse address string
+#include <stdio.h>
+#include <stdlib.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <inttypes.h>
 
-int main(int argc, char** argv);
-void printFabrics(struct fi_info*);
-void printAddressTypes(void);
-struct fi_info* findInfo(void);
-struct fid_fabric* createProvider(struct fi_info*);
-struct fid_pep* createPassiveEndpoint(struct fi_info*, struct fid_fabric*);
-struct fid_eq* newEventQueue(struct fid_fabric*);
-int setupPassiveConnection(struct passive_connection*);
-int closePassiveConnection(struct passive_connection*);
-int etablishConnection(struct active_connection*,  struct fid_fabric*,  struct fi_eq_cm_entry*);
-void runServer(void);
-void runClient(void);
+const char provider_name[] = "verbs";
+const char server_address[] = "10.0.10.1";
+const enum fi_ep_type endpoint_type = FI_EP_MSG; // FI_EP_MSG // FI_EP_RDM // FI_EP_DGRAM
+const char message[] = "Hello :)"; 
+const uint32_t server_port = 47592;
 
-void printAddressTypes() {
-	g_print(
-			"Address Types:\n"
-			"\tFI_FORMAT_UNSPEC: %i,\n"
-			"\tFI_SOCKADDR: %i,\n"
-			"\tFI_SOCKADDR_IN: %i,\n"
-			"\tFI_SOCKADDR_IN6: %i,\n"
-			"\tFI_SOCKADDR_IB: %i,\n"
-			"\tFI_ADDR_PSMX: %i,\n"
-			"\tFI_ADDR_GNI: %i,\n"
-			"\tFI_ADDR_STR: %i\n",
-			FI_FORMAT_UNSPEC,
-			FI_SOCKADDR,
-			FI_SOCKADDR_IN,
-			FI_SOCKADDR_IN6,
-			FI_SOCKADDR_IB,
-			FI_ADDR_PSMX,
-			FI_ADDR_GNI,
-			FI_ADDR_STR);
-}
+#define PP_CLOSE_FID(fd) \
+	do { \
+		int ret; \
+		if((fd)) {  \
+			ret = fi_close(&(fd)->fid); \
+			if(ret) { \
+				g_error("failed to close fid!"); \
+				fd = NULL; \
+			} \
+		} \
+	} while(0) \
 
-void printFabrics (struct fi_info* infos){
-	struct fi_info* itr;
-
-	g_print("Fabrics:\n");
-	for(itr = infos; itr->next; itr = itr->next)
-	{
-		g_print("\tname: %s, provider: %s, addr(set?%itype?=str?%i):",
-				itr->fabric_attr->name,
-				itr->fabric_attr->prov_name,
-				!!itr->src_addr,
-				itr->addr_format);
-		if (itr->src_addr && itr->addr_format == FI_ADDR_STR) {
-			g_print(" %s", (char*)itr->src_addr);
-		}
-		g_print("\n");
-	}
-}
-
-struct fi_info* findInfo() {
-	struct fi_info* result = NULL;
+struct {
 	struct fi_info* hints;
-	struct fi_info* fabric_infos;
-	struct fi_domain_attr* domain_buffer;
-	int error;
-
-	hints = fi_allocinfo();
-	hints->caps = FI_MSG | FI_RMA;
-	hints->ep_attr->type = FI_EP_MSG;
-	domain_buffer = hints->domain_attr;
-	hints->domain_attr = NULL;
-
-	error = fi_getinfo(
-			FI_VERSION(1, 6),
-			NULL,
-			NULL,
-			FI_SOURCE,
-			hints,
-			&fabric_infos);
-	if (error != 0) {
-		g_critical("Error while initiating fi_info with:\n\t%s",
-				fi_strerror(abs(error)));
-		goto end;
-	}
-	printAddressTypes();
-	printFabrics(fabric_infos);
-	g_print("Select the first fabric");
-	result = fi_dupinfo(fabric_infos);
-end:
-	hints->domain_attr = domain_buffer;
-	fi_freeinfo(hints);
-	fi_freeinfo(fabric_infos);
-	return result;
-}
-
-struct fid_fabric* createProvider(struct fi_info* info) {
-	struct fid_fabric* result = NULL;
-	int error;
-	error =  fi_fabric(info->fabric_attr, &result, NULL);
-	if (error != FI_SUCCESS) {
-		g_critical("Failed to setup fabric, with:\n\t%s",
-				fi_strerror(abs(error)));
-		result = NULL;
-	}
-	return result;
-}
-
-struct fid_pep* createPassiveEndpoint(
-		struct fi_info* info,
-		struct fid_fabric* provider) {
-	struct fid_pep* result = NULL;
-	int error;
-	error = fi_passive_ep(provider, info, &result, NULL);
-	if(!!error) {
-		g_critical("Failed to create passive endpoint, with:\n\t%s",
-				fi_strerror(abs(error)));
-	}
-	return result;
-}
-
-struct fid_eq* newEventQueue(struct fid_fabric* provider) {
-	struct fid_eq* result;
-	struct fi_eq_attr attr = {
-		.size = 0,
-		.flags = 0,
-		.wait_obj = FI_WAIT_UNSPEC,
-		.signaling_vector = 0,
-		.wait_set = NULL
-	};
-	int error;
-
-	error = fi_eq_open(provider, &attr, &result, NULL);
-	if (!!error) {
-		g_critical("Failed to create event queue, with\n\t%s",
-				fi_strerror(abs(error)));
-		result = NULL;
-	}
-
-	return result;
-}
-
-struct fid_cq* newContentQueue(struct fid_domain* domain) {
-	int error;
-	struct fi_cq_attr attr;
-	struct fid_cq* result;
-
-	error = fi_cq_open(domain, &attr, &result, &result);
-	if (error < 0) {
-		g_critical("Failed to create Content Queue, with:\n\t%s",
-				fi_strerror(abs(error)));
-		return NULL;
-	}
-	return result;
-}
-
-int setupPassiveConnection(struct passive_connection* connection) {
-	struct fi_info* info;
-	struct fid_fabric* provider;
-	struct fid_pep* passive_endpoint;
-	struct fid_eq* event_queue;
-	int error;
-
-	if(!(info = findInfo())) { goto fail; }
-	if(!(provider = createProvider(info))) { goto fail; }
-	if(!(passive_endpoint = createPassiveEndpoint(info, provider))) { goto fail; }
-	if(!(event_queue = newEventQueue(provider))) { goto fail; }
-
-	// ep must be socket type to support connection managment events
-	// https://ofiwg.github.io/libfabric/master/man/fi_endpoint.3.html
-	error = fi_pep_bind(passive_endpoint,  &event_queue->fid, 0);
-	if(error != 0) {
-		g_critical("Failing to bind endpoint, with:\n\t%s",
-				fi_strerror(abs(error)));
-		goto fail;
-	}
-	error = fi_listen(passive_endpoint);
-	if (error != 0) {
-		g_critical("Failed to setting passive endpoint to listen, with:\n\t%s",
-				fi_strerror(abs(error)));
-		goto fail;
-	}
-	g_message("Setup Passive Endpoint, can recive connections now :)");
-
-	connection->event_queue = event_queue;
-	connection->info = info;
-	connection->passive_endpoint = passive_endpoint;
-	connection->provider = provider;
-
-	return 0;
-fail:
-	return 1;
-}
-
-int closePassiveConnection(struct passive_connection* connection) {
-	int error;
-	if((error = fi_close(&connection->passive_endpoint->fid)) != 0) {
-		g_critical("Failed to close passive endpoint, with:\n\t%s",
-				fi_strerror(abs(error)));
-		return 1;
-	}
-	if((error = fi_close(&connection->provider->fid)) != 0) {
-		g_critical("Failed to close provider, with:\n\t%s",
-				fi_strerror(abs(error)));
-		return 1;
-	}
-	return 0;
-}
-
-
-int readEvent(struct passive_connection* connection, struct my_event* event) {
-	int error;
-	struct fi_eq_err_entry event_queue_err;
-
-	error = fi_eq_sread(connection->event_queue, &event->type, event->data, EVENT_SIZE, 1000, 0);
-	if (error < 0) {
-		if (error == -FI_EAVAIL) {
-			error = fi_eq_readerr(connection->event_queue, &event_queue_err, 0);
-			if (error < 0) {
-				g_critical("Error while reading error from event queue:\n\t%s",
-						fi_strerror(abs(error)));
-			} else {
-				g_critical("Error message on event queue:\n\t%s",
-						fi_eq_strerror(
-							connection->event_queue,
-							event_queue_err.prov_errno,
-							event_queue_err.err_data,
-							NULL,
-							0));
-			}
-		}
-		return -1;
-	} else {
-		return error;
-	}
-}
-
-int etablishConnection(struct active_connection* connection, struct fid_fabric* provider, struct fi_eq_cm_entry* request) {
-	int error;
+	struct {
+		char* dst_addr;
+		uint32_t dst_port;
+	} opts;
+	int ctrl_connfd;
+	void* ctrl_buf;
+	char is_server;
+	struct fid_cq* txcq;
+	struct fid_cq* rxcq;
+	void* ctx;
+	struct fi_endpoint* ep;
+	struct fi_endpoint* pep;
+	struct fi_info* fi;
+	struct fid_fabric* fabric;
+	struct fid_eq* eq;
+	struct fid_eq_attr eq_attr;
 	struct fid_domain* domain;
+	struct fid_av* av;
+} ct;
 
-	fi_domain(provider, request->info, &domain, NULL);
-	g_message("Got connection request!");
-	error = fi_endpoint(
-				NULL,
-				request->info,
-				&connection->endpoint,
-				NULL);
-	fi_freeinfo(request->info);
-	if (error < 0) {
-		g_critical("Failed to create endpoint for connection, with\n\t%s",
-				fi_strerror(abs(error)));
-		return -1;
-	}
+void free_ct(void);
+void run_msg(void);
+void init_client(void);
+void init_server(void);
+void msg_client(void);
+void msg_server(void);
+int parse_address(char* address, uint16_t port,  struct addrinfo** result);
 
-	if(!(connection->content_queue = newContentQueue(domain))) {
-		fi_close(&connection->endpoint->fid);
-		return -1;
+void free_ct(void) {
+	if(ct.hints) {
+		fi_freeinfo(ct.hints);
+		ct.hints = NULL;
 	}
-	error = fi_ep_bind(connection->endpoint, &connection->content_queue->fid, 0); 
-	if (error < 0) {
-		g_critical("Failed to bind active endpoint, with\n\t%s",
-				fi_strerror(abs(error)));
-		return -1;
-	}
-
-	fi_accept(connection->endpoint, NULL, 0);
-	return 0;
 }
 
-void runServer() {
-	int read;
-	struct passive_connection connection;
-	struct my_event event;
+int parse_address(char* address, uint16_t port, struct addrinfo** result) {
+	int ret;
+	const char* err_msg;
+	char port_s[6];
 
-	event.data = malloc(EVENT_SIZE);
-
-	if(setupPassiveConnection(&connection) != 0) {
-		g_critical("Failed to setup passive connection!");
-		goto fail;
+	// interface for address resolving
+	struct addrinfo hints = {
+		.ai_family = AF_INET,
+		.ai_socktype = SOCK_STREAM,
+		.ai_protocol = IPPROTO_TCP,
+		.ai_flags = AI_NUMERICSERV
+	};
+	snprintf(port_s, 6, "%" PRIu16, port);
+	ret = getaddrinfo(address, port_s, &hints, result);
+	if(ret != 0) {
+		err_msg = gai_strerror(ret);
+		g_error("getarrdinfo error: %s", err_msg);
+		ret = -EXIT_FAILURE;
+	} else if (*result == NULL) {
+		g_error("parse address gives no results!");
+		ret = -EXIT_FAILURE;
+	} else {
+		ret = EXIT_SUCCESS;
 	}
+	return ret;
+}
 
-	do {
-		if((read = readEvent(&connection, &event)) >= 0) {
-			if (event.type == FI_CONNREQ) {
-				struct active_connection new_connection;
-				etablishConnection(
-						&new_connection,
-						connection.provider,
-						(struct fi_eq_cm_entry*)event.data);
-			}
+void init_client(void) {
+	int ret;
+	struct addrinfo* itr;
+
+	struct addrinfo* address = malloc(sizeof(struct addrinfo));
+	ret = parse_address(ct.opts.dst_addr, ct.opts.dst_port, &address);
+	if(ret) return;
+
+	for(itr = address; itr;itr = itr->ai_next) {
+		ct.ctrl_connfd = socket(itr->ai_family, itr->ai_socktype, itr->ai_protocol);
+		if(ct.ctrl_connfd == -1) {
+			continue;
 		}
-	} while(1);
+		ret = connect(ct.ctrl_connfd, itr->ai_addr, itr->ai_addrlen);
+		if(ret != -1) { break; }
+		// close(ct.ctrl_connfd); TODO
+	}
+	if(!itr || ret == -1) {
+		g_error("failed to connect!");
+	}
+	freeaddrinfo(address);
+}
+bool verify_cq(uint64_t msg_len) {
+	struct fi_cq_err_entry comp;
+	uint64_t msg_cnt = 0;
 
-
-
-	if(closePassiveConnection(&connection)) { goto fail; }
-fail:
-	return;
+	while(msg_cnt < msg_len) {
+		ret = fi_cq_read(ct.txcq, &comp, 1);
+		if(ret < 0 && ret != -FI_EAGAIN) {
+			g_error("failed to verify len!");
+			return; 
+		}
+		msg_cnt += ret;
+	}
 }
 
-void runClient() {
+struct fi_info* get_info() {
+	struct fi_info* info;
+	fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), NULL, NULL, 0, &ct.hints, &info);
+	// maybe setup ct.rx_ctx_ptr
 }
+
+void open_ep() {
+	// open endpoint!
+	struct cq_attr attrs;
+	attrs.wait_obj = FI_WAIT_NONE;
+	attr.size = ct.fi->tx_attr->size;
+	ret = fi_cq_open(ct.domain, &attrs, &ct.txcq, &ct.txcq);
+	if(ret) { g_error("failed to open tx c queue"); return; }
+	attrs.size = ct.fi->rx_attr->size;
+	ret = fi_cq_open(ct.domain, &attrs, &ct.rxcq, &ct.rxcq);
+	if(ret) { g_error("failed to open rx c queue"); return; }
+	// endpoint type check!
+	if(ct.fi->ep_attr->type != endpoint_type) {
+		g_error("wong ep type!"); return; }
+	if(endpoint_type == FI_EP_RDM || endpoint_type == FI_EP_DGRAM) {
+		if(ct.fi->domain_attr->av_type != FI_AV_UNSPEC) {
+			ct.av_attr.type = ct.fi->domain_attr->av_type;
+		}
+		ret = fi_av_open(ct->domain, &ct.av_attr, ct.av, NULL);
+		if(ret) { g_error("failed to open av!"); return; }
+	}
+	if (fi->tx_attr->mode & FI_MSG_PREFIX)
+	{g_error("hanlde prefixes!"); return; }
+	if (fi->rx_attr->mode & FI_MSG_PREFIX)
+	{g_error("hanlde prefixes!"); return; }
+	ret = fi_endpoint(ct.domain, ct.fi, &ct.ep, NULL);
+	if(ret) { g_error("failed to open endpoint!"); return; }
+}
+
+void client_connect() {
+	struct fi_eq_cm_enrty entry;
+	uint32_t event;
+	ssize_t rd;
+	int ret;
+	const char* name; // rem_name
+
+	// read name len
+	uint32_t len;
+	read(ct.ctrl_connfd, &len, sizeof(len));
+	len = ntohl(len);
+
+	// read addr format and addr
+	read(ct.ctrl_connfd, ct.hints->addr_format, sizeof(ct->hints->addr_format));
+	ct.hints->dest_addr = malloc(len);
+	ct.hints->dest_addrlen = len;
+	pp_ctrl_recv(ct, name, len);
+
+
+	ct.fi = get_info();
+	ret = fi_fabric(ct.fi->fabric_attr, &(ct.fabric), NULL);
+	if(ret) { g_error("failed to open fabric!"); return; }
+	ret = fi_eq_open(ct.fabric, &(ct.eq_attr), &(ct.eq), NULL);
+	if(ret) { g_error("failed to open event queue!"); return; }
+	ret = fi_domain(ct.fabric, ct.fi, &(ct.domain), NULL);
+	if(ret) { g_error("failed to open domain!"); return; }
+
+	open_ep();
+
+
+	if(endpoint_type == FI_EP_MSG) {
+		ret = fi_ep_bind(ct.ep, ct.eq, 0);
+		if(ret) { g_error("failed to bind eq!"); return; }
+	} else {
+		ret = fi_ep_bind(ct.ep, ct.av, 0);
+		if(ret) { g_error("failed to bind av!"); return; }
+	}
+	ret = fi_ep_bind(ct.ep, ct.txcq, FI_TRANSMIT);
+	if(ret) { g_error("failed to bind tx!"); return; }
+	ret = fi_ep_bind(ct.ep, ct.rxcq, FI_RECV);
+	if(ret) { g_error("failed to bind rx!"); return; }
+	ret = fi_enable(ct.ep);
+	if(ret) { g_error("failed to enable ep!"); return; }
+
+	ret = fi_connect(ct.ep, name, NULL, 0);
+	if(ret) { g_erron("failed to connect!"); return; }
+	ret = fi_eq_sread(ct.eq, &event, &enrty, sizeof(enrty), -1, 0);
+	if(ret != sizeof(entry)) {
+		g_error("failed read connetcion result!"); return; }
+	if(event != FI_CONNECTED || enrty.fid != &ct->ep->fid) {
+		g_error("connection denied!"); return;
+	}
+}
+
+void server_connect() {
+	srtuct fi_eq_cm_entry entry;
+	uint32_t event;
+	size_t addrlen = 0;
+	uint32_t len = 0;
+	int ret;
+	struct fi_info* p_info;
+
+	p_info = get_info();
+	ret = fi_fabric(p_info->fabric_attr, &ct.fabric, NULL);
+	if(ret) { g_error("failed to create fabric"); return; }
+	ret = fi_eq_open(ct.fabric, &ct.eq_attr, &ct.eq, NULL);
+	if(ret) { g_error("failed to create eq"); return; }
+	ret = fi_passive_ep(ct.fabric, p_info, &ct.pep, NULL);
+	if(ret) { g_error("failed to create pep"); return; }
+	ret = fi_pep_bind(ct.pep, &ct.eq->fid, 0);
+	if(ret) { g_error("failed to bind pep"); return; }
+	ret = fi_listen(ct.pep);
+	if(ret) { g_error("failet do start listen!"); return; }
+
+
+	// send name
+	void* name = NULL;
+	ret = fi_getname(&ct.pep->fid, name, &addrlen);
+	if((ret != -FI_ETOOSMALL) || (addrlen <= 0)) {
+		g_error("failed to fetch name len!");
+		return;
+	}
+	name = malloc(addrlen);
+	ret = fi_getname(&ct.pep->fid, name, &addrlen);
+	if(ret) { g_error("failed to fetch name!"); return; }
+
+	len = htonl(addrlen);
+	send(ct.ctrl_connfd, (char*)&len, sizeof(len));
+	send(ct.ctrl_connfd, &ct->fi_pep->addr_format, sizeof(ct->fi_pep->addr_format));
+	send(ct.ctrl_connfd,name, addrlen);
+	
+	// wait for client
+	ret = fi_eq_sread(ct.eq, &event, &entry, sizeof(entry), -1, 0);
+	if(ret != sizeof(entry)) {
+		g_error("failing listen for client on pep!"); return;
+	}
+	if(event != FI_CONNREQ) {
+		g_error("reciving otherthings then CM!"); return;
+	}
+	ct.fi = entry.info;
+	ret = fi_domain(ct.fabric, ct.fi, &ct.domain, NULL);
+	if(ret) { g_error("failed to start domain!"); return; }
+
+	open_ep();
+
+	ret = fi_accept(ct.ep, NULL, 0);
+	if(ret) { g_error("failed to accept!"); return; }
+
+	ret = fi_eq_sread(ct.eq, &event, &entry, sizeof(entry), -1, 0);
+	if(ret != sizeof(enrty)) { g_error("failed to read accept!"); return; }
+	if(event != FI_CONNECTED | entry.fid != &ct->ep->fid) {
+		g_error("no accept message?"); return;
+	}
+
+
+}
+
+
+void msg_client(void){
+	int ret;
+
+	init_client();
+	client_connect();
+	
+	// maybe sync?
+	
+	// sending a message
+	char* tx_buf = malloc(sizeof(message));
+	memcpy(tx_buf, message, sizeof(message));
+	const uint64_t msg_len = sizeof(message);
+	while(1) { 
+		ret = fi_send(
+				ct.ep,
+				tx_buf,
+				msg_len,
+				fi_mr_desc(ct.mr),
+				ct.remote_fi_addr,
+				ct.ctx);
+		if(!ret) break;
+		if(ret != -FI_EAGAIN) { g_error("send failed!"); return; }
+	}
+	verify_cq(msg_len);
+}
+
+void msg_server(){
+	init_server();
+	server_connect();
+
+	// reciving a message
+	char* rx_buf = malloc(sizeof(message));
+	const uint64_t msg_len = sizeof(message);
+	// verify_cq(??rx_seq??);
+	while(1) {
+		ret = fi_recv(
+			ct.ep,
+			rx_buf,
+			msg_len,
+			fi_mr_desc(ct.mr),
+			0,
+			ct.ctx);
+		if(!ret) break;
+		if(ret != -FI_EAGAIN) { g_error("recive failed!"); return; }
+	}
+	verify_cq(msg_len);	
+	g_message("recived message: %s", rx_buf);
+
+}
+
+void run_msg(void) {
+	if(ct.is_server) {msg_server();}
+	else {msg_client();}
+}
+
+
 
 int main(int argc, char** argv) {
-	if (argc != 2) {
-		g_critical("usage: cmd [server|client]");
-		return 1;
-	}
-	if (strcmp(argv[1], "server") == 0) {
-		runServer();
-	} else if (strcmp(argv[1], "client")) {
-		runClient();
-	} else {
-		g_critical("expected server or client, got '%s'", argv[1]);
-		return 1;
-	}
-	return 0;
+	if (argc != 2) { g_error("expect 1 argument [client|server]"); return EXIT_FAILURE; }
+	if(strcmp(argv[1], "client") == 0) { ct.is_server = 0; }
+	else if (strcmp(argv[1], "server") == 0) { ct.is_server = 1; }
+	else { g_error("expect client or server, not '%s'.", argv[1]); return EXIT_FAILURE; }
 
+	char* p_name = malloc(sizeof(provider_name));
+	memcpy(p_name, provider_name, sizeof(provider_name));
+	char* s_address = malloc(sizeof(server_address));
+	memcpy(s_address, server_address, sizeof(server_address));
+
+	int ret = EXIT_SUCCESS;
+
+	ct.hints = fi_allocinfo();
+	if(!ct.hints) return EXIT_FAILURE;
+	ct.hints->caps = FI_MSG;
+	ct.hints->mode = FI_CONTEXT | FI_CONTEXT2 | FI_MSG_PREFIX;
+	ct.hints->domain_attr->mr_mode = FI_MR_LOCAL; // | OFI_MR_BASIC_MAP;
+	ct.hints->fabric_attr->prov_name = p_name;
+	ct.hints->ep_attr->type = endpoint_type; 
+	ct.opts.dst_addr = s_address;
+	ct.opts.dst_port = server_port;
+	ct.eq_attr.wait_obj = FI_WAIT_UNSPEC;
+
+	switch (endpoint_type) {
+	case FI_EP_MSG: run_msg(); break;
+	default: g_error("Endpoint not supported!"); ret = EXIT_FAILURE;
+	}
+	fi_shutdown(ct.ep,0);
+
+	free_ct();
+	return -ret;
+}
